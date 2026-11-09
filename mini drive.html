@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mini Drive</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--ink:#0066ff;--mute:#650a0a;--line:#dde2e8;--acc:#0b6e8a;--danger:#b3261e;--hover:#eef3f6}
+@media (prefers-color-scheme:dark){:root{--bg:#0073ff;--card:#0177ff;--ink:#e6eaef;--mute:#98a3b0;--line:#384f0d;--acc:#00c3ff;--danger:#ff1100;--hover:#222c36}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+[hidden]{display:none!important}
+.wrap{max-width:860px;margin:0 auto;padding:24px 16px}
+header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px;gap:12px;flex-wrap:wrap}
+h1{font-size:1.4rem;margin:0}
+.top{color:var(--mute)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.panel.drag{outline:2px dashed var(--acc);outline-offset:-6px}
+.bar{display:flex;gap:10px;flex-wrap:wrap;padding:14px;border-bottom:1px solid var(--line)}
+button,.btn{padding:8px 14px;border:0;border-radius:6px;background:var(--acc);color:#fff;font:inherit;cursor:pointer;display:inline-block}
+@media (prefers-color-scheme:dark){button,.btn{color:#46cffc}}
+button.alt{background:none;color:var(--acc);border:1px solid var(--line)}
+button.mini{background:none;color:var(--acc);padding:4px 8px}
+button.mini:hover,button.alt:hover{background:var(--hover)}
+button.mini.del{color:var(--danger)}
+input[type=search],input[type=text],input[type=password]{padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;background:var(--card);color:var(--ink);min-width:0}
+input[type=search]{flex:1;min-width:140px}
+:is(input,button,a,label):focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.crumbs{padding:10px 14px;color:var(--mute);border-bottom:1px solid var(--line)}
+.row{display:grid;grid-template-columns:1fr 90px 120px auto;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}.row:hover{background:var(--hover)}
+.row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .meta{color:var(--mute);font-size:.9rem}
+.row .acts{display:flex;justify-content:flex-end}
+.empty{padding:40px 14px;text-align:center;color:var(--mute)}
+.msg{min-height:1.5em;margin-top:10px;color:var(--mute)}
+.msg.bad{color:var(--danger)}
+.foot{color:var(--mute);font-size:.9rem}
+#auth{max-width:340px;margin:10vh auto}
+#authForm{display:grid;gap:10px;padding:20px}
+.meter{height:6px;background:var(--line);border-radius:3px;margin-top:4px;overflow:hidden;width:140px}
+.meter i{display:block;height:100%;background:var(--acc)}
+@media (max-width:620px){.row{grid-template-columns:1fr auto}.row .date,.row .size{display:none}}
+</style>
+</head>
+<body>
+
+<div id="auth" hidden>
+  <h1 style="margin-bottom:14px">Mini Drive</h1>
+  <div class="panel">
+    <form id="authForm">
+      <input type="text" id="u" placeholder="Nama pengguna" autocomplete="username" required>
+      <input type="password" id="p" placeholder="Kata sandi" autocomplete="current-password" required>
+      <input type="text" id="inv" placeholder="Kode undangan (jika diminta)" autocomplete="off" hidden>
+      <button id="authBtn">Masuk</button>
+    </form>
+  </div>
+  <div class="msg bad" id="authMsg" role="alert"></div>
+  <p class="foot"><span id="authAsk">Belum punya akun?</span> <a href="#" id="authSwap">Buat akun</a></p>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <header>
+    <h1>Drive milik <span id="who"></span></h1>
+    <span class="top"><a href="#" id="logout">Keluar</a></span>
+  </header>
+  <div class="panel" id="drop">
+    <div class="bar">
+      <label class="btn" tabindex="0" id="upLabel">Unggah file<input type="file" id="file" multiple hidden></label>
+      <button class="alt" id="newFolder">Folder baru</button>
+      <input type="search" id="q" placeholder="Cari di folder ini" aria-label="Cari di folder ini">
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div id="list"></div>
+  </div>
+  <div class="msg" id="msg" role="status" aria-live="polite"></div>
+  <div class="top"><span id="used"></span><div class="meter" aria-hidden="true"><i id="bar" style="width:0"></i></div></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let cwd = '', items = [], registering = false;
+
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, props);
+  kids.forEach(k => e.append(k));
+  return e;
+}
+const human = n => { const u = ['B','KB','MB','GB']; let i = 0; while (n >= 1024 && i < 3) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; };
+const say = (t, bad = false) => { $('msg').textContent = t; $('msg').className = 'msg' + (bad ? ' bad' : ''); };
+
+async function call(url, body, form) {
+  const o = { method: body || form ? 'POST' : 'GET', headers: { 'X-Requested-With': 'fetch' } };
+  if (body) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(body); }
+  if (form) o.body = form;
+  let r;
+  try { r = await fetch(url, o); } catch (e) { throw new Error('Tidak dapat terhubung ke server.'); }
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 401 && url !== '/api/login') { showAuth(); throw new Error('Sesi berakhir. Silakan masuk lagi.'); }
+  if (!r.ok) throw new Error(d.error || 'Terjadi kesalahan.');
+  return d;
+}
+
+/* ---------- masuk / daftar ---------- */
+function showAuth() { $('app').hidden = true; $('auth').hidden = false; $('u').focus(); }
+function setMode(reg) {
+  registering = reg;
+  $('authBtn').textContent = reg ? 'Buat akun' : 'Masuk';
+  $('authAsk').textContent = reg ? 'Sudah punya akun?' : 'Belum punya akun?';
+  $('authSwap').textContent = reg ? 'Masuk' : 'Buat akun';
+  $('p').autocomplete = reg ? 'new-password' : 'current-password';
+  $('inv').hidden = !reg;
+  $('authMsg').textContent = '';
+}
+$('authSwap').onclick = e => { e.preventDefault(); setMode(!registering); };
+$('authForm').onsubmit = async e => {
+  e.preventDefault();
+  const body = { username: $('u').value, password: $('p').value };
+  try {
+    if (registering) {
+      await call('/api/register', { ...body, invite: $('inv').value });
+      setMode(false);
+      $('authMsg').textContent = '';
+    }
+    const d = await call('/api/login', body);
+    $('p').value = '';
+    enter(d.user);
+  } catch (x) { $('authMsg').textContent = x.message; }
+};
+$('logout').onclick = async e => { e.preventDefault(); await call('/api/logout', {}).catch(() => {}); items = []; showAuth(); };
+
+function enter(name) {
+  $('who').textContent = name;
+  $('auth').hidden = true; $('app').hidden = false;
+  cwd = ''; load();
+}
+
+/* ---------- daftar file ---------- */
+async function load() {
+  try {
+    const d = await call('/api/list?path=' + encodeURIComponent(cwd));
+    items = d.items;
+    $('used').textContent = `Terpakai ${human(d.used)} dari ${human(d.quota)}`;
+    $('bar').style.width = Math.min(100, d.used / d.quota * 100) + '%';
+    render();
+  } catch (x) { say(x.message, true); }
+}
+
+function go(path) { cwd = path; $('q').value = ''; say(''); load(); }
+
+function render() {
+  const q = $('q').value.trim().toLowerCase();
+  const shown = items.filter(i => i.name.toLowerCase().includes(q));
+
+  const c = $('crumbs');
+  c.replaceChildren(el('a', { href: '#', textContent: 'Drive saya', onclick: e => { e.preventDefault(); go(''); } }));
+  let acc = '';
+  cwd.split('/').filter(Boolean).forEach(part => {
+    acc = acc ? acc + '/' + part : part;
+    const p = acc;
+    c.append(' / ', el('a', { href: '#', textContent: part, onclick: e => { e.preventDefault(); go(p); } }));
+  });
+
+  const list = $('list');
+  list.replaceChildren();
+  if (!shown.length) list.append(el('div', { className: 'empty', textContent: q ? 'Tidak ada yang cocok dengan pencarian.' : 'Folder ini kosong. Seret file ke sini atau klik Unggah file.' }));
+  for (const it of shown) {
+    const label = it.is_dir
+      ? el('a', { href: '#', textContent: '\u{1F4C1} ' + it.name, onclick: e => { e.preventDefault(); go(it.path); } })
+      : el('a', { href: '/api/download?path=' + encodeURIComponent(it.path), textContent: '\u{1F4C4} ' + it.name });
+    const acts = el('div', { className: 'acts' });
+    if (!it.is_dir) acts.append(el('a', { className: 'btn mini', style: 'background:none;color:var(--acc);padding:4px 8px', href: '/api/download?path=' + encodeURIComponent(it.path), textContent: 'Unduh' }));
+    acts.append(
+      el('button', { className: 'mini', textContent: 'Ganti nama', onclick: () => rename(it) }),
+      el('button', { className: 'mini del', textContent: 'Hapus', onclick: () => del(it) }));
+    list.append(el('div', { className: 'row' },
+      el('div', { className: 'name', title: it.name }, label),
+      el('div', { className: 'meta size', textContent: it.is_dir ? '-' : human(it.size) }),
+      el('div', { className: 'meta date', textContent: new Date(it.modified).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) }),
+      acts));
+  }
+}
+
+/* ---------- aksi ---------- */
+async function act(fn, ok) {
+  try { await fn(); if (ok) say(ok); await load(); } catch (x) { say(x.message, true); }
+}
+function rename(it) {
+  const v = prompt('Nama baru:', it.name);
+  if (v && v.trim() !== it.name) act(() => call('/api/rename', { path: it.path, name: v }), 'Nama diganti.');
+}
+function del(it) {
+  if (confirm(`Hapus "${it.name}"${it.is_dir ? ' beserta seluruh isinya' : ''}?`))
+    act(() => call('/api/delete', { path: it.path }), `"${it.name}" dihapus.`);
+}
+$('newFolder').onclick = () => {
+  const v = prompt('Nama folder baru:');
+  if (v && v.trim()) act(() => call('/api/mkdir', { path: cwd, name: v }), `Folder "${v.trim()}" dibuat.`);
+};
+$('q').oninput = render;
+
+async function upload(files) {
+  if (!files.length) return;
+  say(`Mengunggah ${files.length} file...`);
+  const fd = new FormData();
+  fd.append('path', cwd);
+  files.forEach(f => fd.append('files', f));
+  try {
+    const d = await call('/api/upload', null, fd);
+    say(d.skipped.length ? `${d.saved} file diunggah. Tidak muat di kuota: ${d.skipped.join(', ')}` : `${d.saved} file berhasil diunggah.`, !!d.skipped.length);
+  } catch (x) { say(x.message, true); }
+  load();
+}
+$('file').onchange = e => { upload([...e.target.files]); e.target.value = ''; };
+$('upLabel').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } };
+
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', e => upload([...e.dataTransfer.files].filter(f => f.size || f.type)));
+
+/* ---------- mulai ---------- */
+call('/api/me').then(d => d.user ? enter(d.user) : showAuth()).catch(() => { showAuth(); $('authMsg').textContent = 'Tidak dapat terhubung ke server.'; });
+</script>
+</body>
+</html>
