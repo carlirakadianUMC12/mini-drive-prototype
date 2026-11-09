@@ -1,0 +1,5 @@
+storage/
+drive.db
+.secret_key
+venv/
+__pycache__/
