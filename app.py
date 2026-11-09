@@ -1,3 +1,12 @@
+"""
+Mini Drive (versi online) - backend API untuk akses dari banyak perangkat.
+
+Jalankan:
+    pip install -r requirements.txt
+    python app.py                      # hanya komputer ini
+    HOST=0.0.0.0 python app.py         # bisa diakses perangkat lain di jaringan yang sama
+Variabel opsional: HOST, PORT, QUOTA_MB (default 1024), HTTPS=1 (jika sudah pakai HTTPS)
+"""
 import os
 import re
 import secrets
@@ -13,8 +22,11 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE = Path(__file__).parent.resolve()
-STORAGE = BASE / "storage"
-DB = BASE / "drive.db"
+# Di Vercel hanya /tmp yang bisa ditulis, dan isinya bersifat sementara (mode demo).
+DATA = Path("/tmp/minidrive") if os.environ.get("VERCEL") else BASE
+DATA.mkdir(parents=True, exist_ok=True)
+STORAGE = DATA / "storage"
+DB = DATA / "drive.db"
 QUOTA = int(os.environ.get("QUOTA_MB", "1024")) * 1024 * 1024
 INVITE = os.environ.get("INVITE_CODE", "")  # jika diisi, pendaftar wajib memasukkan kode ini
 STORAGE.mkdir(exist_ok=True)
@@ -22,11 +34,11 @@ STORAGE.mkdir(exist_ok=True)
 app = Flask(__name__)
 if os.environ.get("BEHIND_PROXY") == "1":  # aktifkan jika berjalan di belakang Nginx
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-key_file = BASE / ".secret_key"
-if not key_file.exists():
+key_file = DATA / ".secret_key"
+if not os.environ.get("SECRET_KEY") and not key_file.exists():
     key_file.write_text(secrets.token_hex(32))
 app.config.update(
-    SECRET_KEY=key_file.read_text(),
+    SECRET_KEY=os.environ.get("SECRET_KEY") or key_file.read_text(),
     MAX_CONTENT_LENGTH=500 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
